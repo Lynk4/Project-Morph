@@ -18,7 +18,7 @@
 
 ---
 
-## Cross Compilation...
+## Compilation...
 
 ```cmd
 cl mk-2-polymorph_remote.c /O2 /link user32.lib wininet.lib
