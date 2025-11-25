@@ -47,6 +47,9 @@ cl mk-1-polymorph.c /O2 /link user32.lib
 
 <img width="988" height="518" alt="Screenshot 2025-11-23 at 6 50 44 PM" src="https://github.com/user-attachments/assets/b389df6e-ec1f-49ce-9a9b-28db636968c8" />
 
+---
+
+<img width="981" height="407" alt="Screenshot 2025-11-25 at 9 30 16 AM" src="https://github.com/user-attachments/assets/1cf5dbe6-3a25-491a-9a08-678e37a88eec" />
 
 ---
 
