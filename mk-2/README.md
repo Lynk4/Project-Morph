@@ -26,5 +26,9 @@ cl mk-2-polymorph_remote.c /O2 /link user32.lib wininet.lib
 
 ---
 
+## Execution.....
 
+<img width="985" height="510" alt="Screenshot 2025-11-25 at 9 39 22 AM" src="https://github.com/user-attachments/assets/b215d3e2-656b-4053-9184-228f3aaf123b" />
+
+---
 
